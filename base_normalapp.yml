@@ -1,0 +1,140 @@
+# create  namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{project}}-{{environment}}
+  labels:
+    name: {{project}}-{{environment}}
+---
+
+# create cwagent service account and role binding
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{project}}-{{application}}-sa
+  namespace: {{project}}-{{environment}}
+  labels:
+    name: {{project}}-{{application}}-sa
+    namespace: {{project}}-{{environment}}
+    app: {{project}}-{{application}}
+    deployment: {{project}}-{{application}}-dp
+---
+
+# Create Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{project}}-{{application}}-dp
+  namespace: {{project}}-{{environment}}
+  labels:
+    name: {{project}}-{{application}}-dp
+    namespace: {{project}}-{{environment}}
+    app: {{project}}-{{application}}
+    serviceaccount: {{project}}-{{application}}-sa
+    deployment: {{project}}-{{application}}-dp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{project}}-{{application}}
+      deployment: {{project}}-{{application}}-dp
+  template:
+    metadata:
+      labels:
+        namespace: {{project}}-{{environment}}
+        app: {{project}}-{{application}}
+        deployment: {{project}}-{{application}}-dp
+    spec:
+      serviceAccountName: {{project}}-{{application}}-sa
+      containers:
+      - name: {{project}}-{{application}}
+        image: nginxdemos/hello
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 50m
+          limits:
+            memory: 1024Mi
+            cpu: 500m
+        env:
+          - name: ENVIRONMENT
+            value: "values"
+        ports:
+        - containerPort: {{containerport}}
+        readinessProbe:
+          tcpSocket:
+            port: {{containerport}}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: {{containerport}}
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      tolerations:
+      - key: "spotInstance"
+        operator: "Equal"
+        value: "true"
+        effect: "PreferNoSchedule"
+      nodeSelector:    
+        eks.amazonaws.com/capacityType: SPOT       
+---
+#### Create Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{project}}-{{application}}-svc
+  namespace: {{project}}-{{environment}}
+spec:
+  selector:
+    app: {{project}}-{{application}}
+    deployment: {{project}}-{{application}}-dp
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: {{containerport}}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 100000
+---
+### Create HPA
+
+apiVersion: autoscaling/v2beta1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{project}}-{{application}}-hpa
+  namespace: {{project}}-{{environment}}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{project}}-{{application}}-dp
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        targetAverageUtilization: 60
+
+---
+#### Create Nginx Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{project}}-{{application}}-ingress
+  namespace: {{project}}-{{environment}}
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: {{project}}fe.{{environment}}.rapidinnovation.tech
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{project}}-{{application}}-svc
+            port:
+              number: 80
